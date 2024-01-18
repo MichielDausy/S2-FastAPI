@@ -1,14 +1,38 @@
 # Importing libraries
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends
 import requests
 import httpx
 import base64
 
 app = FastAPI()
 
+# Function to get the API key from the Bastion API
+def get_api_key(password: str) -> str:
+    try:
+        bastion_api_url = "https://your-aws-api-url.com/apikey"  # Replace with the actual URL
+        response = requests.get(bastion_api_url, params={"password": password})
+        response.raise_for_status()
+        api_key = response.json()["api_key"]
+        return api_key
+    except requests.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving API key: {str(e)}")
+
+# Function to test the API key
+def test_api_key(api_key: str) -> None:
+    try:
+        bastion_protected_url = "https://your-aws-api-url.com/protected"  # Replace with the actual URL
+        headers = {"Authorization": f"Bearer {api_key}"}
+        response = requests.get(bastion_protected_url, headers=headers)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error testing API key: {str(e)}")
+
+
 # Endpoint to obtain an image from AI Model 1, send it to Model 2, and then send it to Spring Boot API
 @app.post("/process_images")
 async def process_images():
+    global result_from_model2
+    
     try:
         # Endpoint of AI Model 1
         ai_model1_endpoint = ""
@@ -45,37 +69,47 @@ async def process_images():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-#Endpoint om een afbeelding van AI Model 1 te verkrijgen, naar Model 2 te sturen en naar Spring Boot API te verzenden
-# @app.post("/process_images")
-# async def process_images(image_model1: UploadFile = File(...), timestamp: str = None):
-#     try:
-#         result_from_model1 = await image_model1.read()
-#         result_from_model1_base64 = base64.b64encode(result_from_model1).decode("utf-8")
+#
+@app.post("/send_data")
+async def send_data_to_bastion_api():
+    try:
+        bastion_api_url = "http://localhost:8000/uploadfile"
 
-#         # Define the endpoint of AI Model 2
-#         ai_model2_endpoint = "http://ai-model2-endpoint/process_image"
+        data_to_send = {"image_model2": result_from_model2}  
 
-#         # Send the image to AI Model 2
-#         response = requests.post(ai_model2_endpoint, json={"image": result_from_model1_base64})
+        async with httpx.AsyncClient() as client:
+            response = await client.post(bastion_api_url, json=data_to_send)
+        
+        # Check for a successful response
+        response.raise_for_status()
 
-#         #check for successful response
-#         response.raise_for_status()
-
-#         # Get the result from AI Model 2
-#         result_from_model2 = response.json()["result"]
-
-#        # Send image and result to Spring Boot API
-#         async with httpx.AsyncClient() as client:
-#           response = await client.post(
-#               "http://spring-boot-api/submit_data",
-#               json={"image_model2": result_from_model2, "timestamp": timestamp}
-#           )
+        return {"status": "Successful"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-#         # Controleer op een succesvolle respons
-#         response.raise_for_status()
+##########################################################################################################
 
-#         return {"status": "Successful"}
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
+# Endpoint to send data to the remote AWS API
+@app.post("/send_data")
+async def send_data_to_bastion_api(password: str = Form(...), file: UploadFile = File(...)):
+    try:
+        # Step 1: Get API key from the remote AWS API
+        api_key = get_api_key(password)
 
+        # Step 2: Test the API key
+        test_api_key(api_key)
+
+        # Step 3: Send data to the protected endpoint
+        bastion_api_url = "https://your-aws-api-url.com/uploadfile"
+        data_to_send = {"image_model2": result_from_model2} 
+        async with httpx.AsyncClient() as client:
+            response = await client.post(bastion_api_url, json=data_to_send)
+        
+        response.raise_for_status()
+
+        return {"status": "Successful"}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
